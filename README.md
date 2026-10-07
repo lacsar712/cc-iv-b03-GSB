@@ -32,6 +32,14 @@ docker compose up --build
 
 健康检查：`GET http://localhost:8202/api/health`
 
+## 逆变器条带
+
+顶栏「逆变器条带」进入专页：左侧维护逆变器编号（扫描员可改名，旁观者只读），右侧整条条带可刷新。
+
+- `GET /api/stripes`：每台逆变器一条，颜色只取**最近一次办结**扫描（`status='done'` 中 `id` 最大那笔，`DISTINCT ON ... ORDER BY string_code, id DESC`）。同一台两笔抢着办完时，条带跟随编号更大的那张。从未办结（仅待处理或无 done 记录）返回 `verdict=null`，前端保持灰色空白，不假装合格。
+- `POST /api/inverters/rename`：仅扫描员（writer），把某编号名下所有扫描改名；旁观者返回 403。
+- 条带颜色严格绑定接口返回，前端不做乐观涂色；提交后等工人办结、接口回报新颜色，画面才变色，避免「只把画面涂绿、接口仍报旧颜色」。
+
 ## 种子
 
 | 组串 | 填充因子 | 结论 |

@@ -141,4 +141,69 @@ async def create_log(request: Request) -> dict:
         return dump(row)
 
 
-app = Litestar(route_handlers=[health, login, list_logs, create_log])
+@get("/api/stripes")
+async def list_stripes(request: Request) -> list:
+    """每台逆变器一条：颜色只认最近一次“已办结”扫描（取编号最大的一笔）。
+
+    从未办结（仅待处理或没有任何 done 记录）的逆变器 verdict 为 None，
+    前端必须保持灰/空，不得凭空给绿。
+    """
+    need_login(request)
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT c.string_code,
+                      d.id AS last_scan_id,
+                      d.verdict,
+                      d.fill_factor,
+                      d.processed_at
+               FROM (SELECT DISTINCT string_code FROM iv_scans) c
+               LEFT JOIN (
+                   SELECT DISTINCT ON (string_code)
+                          string_code, id, verdict, fill_factor, processed_at
+                   FROM iv_scans
+                   WHERE status = 'done'
+                   ORDER BY string_code, id DESC
+               ) d USING (string_code)
+               ORDER BY c.string_code"""
+        ).fetchall()
+        return [dump(r) for r in rows]
+
+
+@post("/api/inverters/rename", status_code=200)
+async def rename_inverter(request: Request) -> dict:
+    """扫描员改逆变器编号，名下所有扫描（含待处理）一起改名。旁观身份 403。"""
+    user = need_writer(request)
+    data = await request.json()
+    old_code = (data.get("string_code") or "").strip()
+    new_code = (data.get("new_code") or data.get("new_string_code") or "").strip()
+    if not old_code:
+        raise HTTPException(status_code=400, detail="原编号不能为空")
+    if not new_code:
+        raise HTTPException(status_code=400, detail="新编号不能为空")
+    if old_code == new_code:
+        return {"ok": True, "string_code": old_code}
+    with connect() as conn:
+        with conn.transaction():
+            exists = conn.execute(
+                "SELECT 1 FROM iv_scans WHERE string_code = %s LIMIT 1",
+                (old_code,),
+            ).fetchone()
+            if exists is None:
+                raise HTTPException(status_code=404, detail="逆变器不存在")
+            clash = conn.execute(
+                "SELECT 1 FROM iv_scans WHERE string_code = %s LIMIT 1",
+                (new_code,),
+            ).fetchone()
+            if clash is not None:
+                raise HTTPException(status_code=400, detail="该编号已被其他逆变器占用")
+            conn.execute(
+                "UPDATE iv_scans SET string_code = %s WHERE string_code = %s",
+                (new_code, old_code),
+            )
+        conn.commit()
+    return {"ok": True, "string_code": new_code, "renamed_by": user["username"]}
+
+
+app = Litestar(
+    route_handlers=[health, login, list_logs, create_log, list_stripes, rename_inverter]
+)
