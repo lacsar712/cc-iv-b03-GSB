@@ -10,8 +10,16 @@ def connect():
 
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS inverters (
+    id serial PRIMARY KEY,
+    code text NOT NULL UNIQUE,
+    created_by text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS iv_scans (
     id serial PRIMARY KEY,
+    inverter_id integer REFERENCES inverters(id) ON DELETE CASCADE,
     string_code text NOT NULL,
     voc_v double precision NOT NULL,
     isc_a double precision NOT NULL,
@@ -23,6 +31,7 @@ CREATE TABLE IF NOT EXISTS iv_scans (
     created_at timestamptz NOT NULL,
     processed_at timestamptz
 );
+
 CREATE OR REPLACE FUNCTION notify_iv_scan() RETURNS trigger AS $$
 BEGIN
   PERFORM pg_notify('iv_scan_new', NEW.id::text);
@@ -34,3 +43,11 @@ CREATE TRIGGER trg_iv_scan_notify
 AFTER INSERT ON iv_scans
 FOR EACH ROW EXECUTE FUNCTION notify_iv_scan();
 """
+
+# 旧库升级：inverter_id 列与 inverters 表可能尚不存在
+MIGRATIONS = [
+    """ALTER TABLE iv_scans ADD COLUMN IF NOT EXISTS inverter_id integer
+       REFERENCES inverters(id) ON DELETE CASCADE""",
+    """CREATE INDEX IF NOT EXISTS idx_iv_scans_inverter_done
+       ON iv_scans (inverter_id, id DESC) WHERE status = 'done'""",
+]
